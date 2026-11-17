@@ -164,6 +164,71 @@ static const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
       transform: scale(0.98);
       filter: brightness(0.9);
     }
+    .imu-bar {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .imu-item {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 6px 4px;
+      text-align: center;
+    }
+    .imu-lbl {
+      font-size: 0.6rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+    }
+    .imu-val {
+      font-size: 0.85rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: #58a6ff;
+      margin-top: 2px;
+    }
+    .tcs-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .btn-tcs {
+      flex: 1;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid var(--accent);
+      background: rgba(0, 210, 106, 0.15);
+      color: var(--accent);
+      font-weight: 800;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+    .btn-tcs.off {
+      border-color: var(--border);
+      background: var(--card);
+      color: var(--text-dim);
+    }
+    .tcs-lamp {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text-dim);
+      font-weight: 700;
+      font-size: 0.8rem;
+      transition: all 0.1s;
+    }
+    .tcs-lamp.active {
+      border-color: #f59e0b;
+      background: rgba(245, 158, 11, 0.25);
+      color: #fbbf24;
+      box-shadow: 0 0 12px rgba(245, 158, 11, 0.45);
+    }
   </style>
 </head>
 <body>
@@ -183,6 +248,25 @@ static const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
     </div>
   </div>
 
+  <div class="imu-bar">
+    <div class="imu-item">
+      <div class="imu-lbl">İleri (ax)</div>
+      <div id="imuAx" class="imu-val">0.00g</div>
+    </div>
+    <div class="imu-item">
+      <div class="imu-lbl">Yanal (ay)</div>
+      <div id="imuAy" class="imu-val">0.00g</div>
+    </div>
+    <div class="imu-item">
+      <div class="imu-lbl">Dönüş (gz)</div>
+      <div id="imuGz" class="imu-val">0.0°/s</div>
+    </div>
+    <div class="imu-item">
+      <div class="imu-lbl">Sıcaklık</div>
+      <div id="imuTemp" class="imu-val">--°C</div>
+    </div>
+  </div>
+
   <div class="controls">
     <!-- Sol: Gaz (Dikey Joystick) -->
     <div id="throttleZone" class="stick-zone">
@@ -199,15 +283,23 @@ static const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
     </div>
   </div>
 
+  <div class="tcs-row">
+    <button id="btnTcs" class="btn-tcs">TCS: AÇIK</button>
+    <div id="tcsLamp" class="tcs-lamp">TCS BEKLEMEDE</div>
+  </div>
+
   <button id="btnEmergency" class="btn-emergency">🚨 ACİL DURDURMA</button>
 
   <script>
     let ws = null;
     let throttleVal = 0;
     let steeringVal = 0.0;
+    let tcsEnabled = true;
     const badge = document.getElementById('statusBadge');
     const throttleDisp = document.getElementById('throttleDisplay');
     const steeringDisp = document.getElementById('steeringDisplay');
+    const btnTcs = document.getElementById('btnTcs');
+    const tcsLamp = document.getElementById('tcsLamp');
     const throttlePuck = document.getElementById('throttlePuck');
     const steeringPuck = document.getElementById('steeringPuck');
     const throttleZone = document.getElementById('throttleZone');
@@ -231,13 +323,33 @@ static const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
       ws.onerror = (err) => {
         ws.close();
       };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'telemetry') {
+            document.getElementById('imuAx').textContent = (data.ax >= 0 ? '+' : '') + data.ax.toFixed(2) + 'g';
+            document.getElementById('imuAy').textContent = (data.ay >= 0 ? '+' : '') + data.ay.toFixed(2) + 'g';
+            document.getElementById('imuGz').textContent = (data.gz >= 0 ? '+' : '') + data.gz.toFixed(1) + '°/s';
+            document.getElementById('imuTemp').textContent = data.temp.toFixed(1) + '°C';
+            if (data.act) {
+              tcsLamp.textContent = '⚡ TCS MÜDAHALE (' + data.thr + '%)';
+              tcsLamp.className = 'tcs-lamp active';
+            } else {
+              tcsLamp.textContent = data.tcs ? 'TCS HAZIR' : 'TCS KAPALI';
+              tcsLamp.className = 'tcs-lamp';
+            }
+          }
+        } catch (e) {}
+      };
     }
 
     function sendCommand() {
       if (ws && ws.readyState === WebSocket.OPEN) {
         const payload = JSON.stringify({
           throttle: Math.round(throttleVal),
-          steering: parseFloat(steeringVal.toFixed(1))
+          steering: parseFloat(steeringVal.toFixed(1)),
+          tcs: tcsEnabled
         });
         ws.send(payload);
       }
@@ -327,6 +439,14 @@ static const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
     steeringZone.addEventListener('touchend', resetSteering);
     steeringZone.addEventListener('touchcancel', resetSteering);
 
+    // --- TCS Ac / Kapat Butonu ---
+    btnTcs.addEventListener('click', () => {
+      tcsEnabled = !tcsEnabled;
+      btnTcs.textContent = tcsEnabled ? 'TCS: AÇIK' : 'TCS: KAPALI';
+      btnTcs.className = tcsEnabled ? 'btn-tcs' : 'btn-tcs off';
+      sendCommand();
+    });
+
     // --- Acil Durdurma Butonu ---
     document.getElementById('btnEmergency').addEventListener('click', () => {
       resetThrottle();
@@ -346,11 +466,14 @@ static const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
 
 WifiService::WifiService()
     : _commandQueue(nullptr),
+      _imuQueue(nullptr),
+      _tcsStatusQueue(nullptr),
       _server(80),
       _webSocket(81),
       _connected(false),
       _lastHeartbeatMs(0),
-      _activeCommand{0, 0.0f} {
+      _lastTelemetryMs(0),
+      _activeCommand{0, 0.0f, true} {
     _instance = this;
 }
 
@@ -360,8 +483,11 @@ void WifiService::webSocketEventWrapper(uint8_t num, WStype_t type, uint8_t* pay
     }
 }
 
-void WifiService::begin(QueueHandle_t commandQueue, const char* ssid, const char* password) {
+void WifiService::begin(QueueHandle_t commandQueue, QueueHandle_t imuQueue,
+                        QueueHandle_t tcsStatusQueue, const char* ssid, const char* password) {
     _commandQueue = commandQueue;
+    _imuQueue = imuQueue;
+    _tcsStatusQueue = tcsStatusQueue;
     Serial.printf("\n[Wi-Fi] Access Point olusturuluyor: '%s'...\n", ssid);
 
     // 1. Wi-Fi Erisim Noktasini (AP) baslat
@@ -391,6 +517,34 @@ void WifiService::begin(QueueHandle_t commandQueue, const char* ssid, const char
 void WifiService::loop() {
     _server.handleClient();
     _webSocket.loop();
+    publishTelemetry();
+}
+
+void WifiService::publishTelemetry() {
+    if (!_connected || _imuQueue == nullptr) return;
+
+    uint32_t now = millis();
+    if ((now - _lastTelemetryMs) < 50) return; // 20 Hz (50 ms) yayin siniri
+    _lastTelemetryMs = now;
+
+    ImuData data;
+    if (xQueuePeek(_imuQueue, &data, 0) != pdPASS) return;
+
+    TcsStatus tcs = {0, true, false};
+    if (_tcsStatusQueue != nullptr) {
+        xQueuePeek(_tcsStatusQueue, &tcs, 0);
+    }
+
+    // 2 ondalik yuvarlama ile hafif JSON paketi olustur
+    char jsonBuf[160];
+    snprintf(jsonBuf, sizeof(jsonBuf),
+             "{\"type\":\"telemetry\",\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,\"gz\":%.1f,\"temp\":%.1f,\"thr\":%d,\"tcs\":%s,\"act\":%s}",
+             data.ax, data.ay, data.az, data.gz, data.temp,
+             tcs.appliedThrottle,
+             tcs.enabled ? "true" : "false",
+             tcs.intervening ? "true" : "false");
+
+    _webSocket.broadcastTXT(jsonBuf);
 }
 
 bool WifiService::isConnected() const {
@@ -458,12 +612,15 @@ void WifiService::handleWebSocketEvent(uint8_t num, WStype_t type, uint8_t* payl
                 return;
             }
 
-            // Gaz ve direksiyon degerlerini oku
+            // Gaz, direksiyon ve TCS durumunu oku
             if (doc.containsKey("throttle")) {
                 _activeCommand.throttle = doc["throttle"].as<int8_t>();
             }
             if (doc.containsKey("steering")) {
                 _activeCommand.steering = doc["steering"].as<float>();
+            }
+            if (doc.containsKey("tcs")) {
+                _activeCommand.tcsEnabled = doc["tcs"].as<bool>();
             }
 
             _activeCommand.validate();

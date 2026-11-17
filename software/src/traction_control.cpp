@@ -1,0 +1,135 @@
+#include "traction_control.h"
+#include <math.h>
+
+// ==============================================================================
+// VDT Platform - IMU Tabanli Traction Control Gerceklesimi (Hafta 5)
+// ==============================================================================
+
+// --- Kalibrasyon ve Guvenlik Esikleri (Saha testinde buradan ayarlanir) ---
+// Katman 1: Kalkis yumusatma (her ~25ms dongude en fazla +%2 artis -> 0->100% ~1.25sn)
+static constexpr int8_t  MAX_THROTTLE_STEP_UP   = 2;
+
+// Katman 2: Viraj ici gaz siniri (direksiyon tam kirikken en fazla %50 gaz)
+static constexpr float   STEERING_DEADBAND_DEG  = 8.0f;
+static constexpr int8_t  CORNER_MIN_CAP_PCT     = 50;
+
+// Virajda spin / oversteer esikleri (MPU6050 olcumleri)
+static constexpr float   SPIN_YAW_THRESHOLD_DPS = 100.0f; // °/s
+static constexpr float   SPIN_LAT_G_THRESHOLD   = 0.30f;  // g
+static constexpr int8_t  SPIN_THROTTLE_CAP_PCT  = 40;     // Spin aninda gazi %40'a cek
+
+// Katman 3: Duz kalkista yerinde patinaj tespiti ve kademeli toparlanma
+static constexpr int8_t  SLIP_CHECK_MIN_THR     = 55;     // %55 ustu gazda kontrol et
+static constexpr float   MIN_EXPECTED_ACCEL_G   = 0.08f;  // En az bu kadar one ivmelenmeli
+static constexpr uint8_t SLIP_DETECT_TICKS      = 5;      // ~125ms boyunca ivme yoksa patinaj
+static constexpr int8_t  SLIP_THROTTLE_CAP_PCT  = 45;     // Tutunma saglanana kadar %45'e dusur
+static constexpr int8_t  SLIP_RECOVERY_STEP     = 1;      // Tutunma gelince tavani yavasca (+%1) ac
+
+TractionController::TractionController()
+    : _enabled(true),
+      _intervening(false),
+      _currentThrottle(0),
+      _slipCap(100),
+      _highThrottleTicks(0) {
+}
+
+void TractionController::setEnabled(bool enabled) {
+    _enabled = enabled;
+    if (!enabled) {
+        _intervening = false;
+        _slipCap = 100;
+        _highThrottleTicks = 0;
+    }
+}
+
+bool TractionController::isEnabled() const {
+    return _enabled;
+}
+
+bool TractionController::isIntervening() const {
+    return _intervening;
+}
+
+void TractionController::reset() {
+    _currentThrottle = 0;
+    _slipCap = 100;
+    _highThrottleTicks = 0;
+    _intervening = false;
+}
+
+int8_t TractionController::computeThrottleCap(int8_t requestedThrottle, float steeringDeg, const ImuData& imu, bool imuValid) {
+    int8_t cap = 100;
+
+    // 1. Direksiyon acisina gore viraj tavanini hesapla (0° -> %100, 29° -> %65)
+    float absSteer = fabsf(steeringDeg);
+    if (absSteer > STEERING_DEADBAND_DEG) {
+        float ratio = (absSteer - STEERING_DEADBAND_DEG) / (PROTOCOL_STEERING_MAX - STEERING_DEADBAND_DEG);
+        if (ratio > 1.0f) ratio = 1.0f;
+        cap = (int8_t)(100.0f - ratio * (100.0f - CORNER_MIN_CAP_PCT));
+    }
+
+    if (!imuValid) {
+        return cap;
+    }
+
+    // 2. Virajda asiri savrulma (Yaw Rate veya Yanal G) varsa gazi sertce sinirla
+    if (absSteer > STEERING_DEADBAND_DEG &&
+        (fabsf(imu.gz) > SPIN_YAW_THRESHOLD_DPS || fabsf(imu.ay) > SPIN_LAT_G_THRESHOLD)) {
+        if (cap > SPIN_THROTTLE_CAP_PCT) {
+            cap = SPIN_THROTTLE_CAP_PCT;
+        }
+    }
+
+    // 3. Duz kalkista yuksek gaza ragmen arac one atilamiyorsa (yerinde patinaj) tavani dusur,
+    // tutunma geldiginde ise tavani yavas yavas (+%1) yukari ac
+    if (absSteer <= STEERING_DEADBAND_DEG && requestedThrottle >= SLIP_CHECK_MIN_THR) {
+        if (imu.ax < MIN_EXPECTED_ACCEL_G) {
+            if (_highThrottleTicks < 255) _highThrottleTicks++;
+        } else {
+            _highThrottleTicks = 0;
+            if (_slipCap < 100) {
+                _slipCap += SLIP_RECOVERY_STEP;
+            }
+        }
+
+        if (_highThrottleTicks >= SLIP_DETECT_TICKS) {
+            _slipCap = SLIP_THROTTLE_CAP_PCT;
+        }
+    } else {
+        _highThrottleTicks = 0;
+        if (_slipCap < 100) {
+            _slipCap += SLIP_RECOVERY_STEP;
+        }
+    }
+
+    if (cap > _slipCap) {
+        cap = _slipCap;
+    }
+
+    return cap;
+}
+
+int8_t TractionController::process(int8_t requestedThrottle, float steeringDeg, const ImuData& imu, bool imuValid) {
+    // Guvenlik Kurali: TCS kapaliysa, gaz sifirsa veya geri vites/frense hic beklemeden gecir
+    if (!_enabled || requestedThrottle <= 0) {
+        _currentThrottle = requestedThrottle;
+        _slipCap = 100;
+        _highThrottleTicks = 0;
+        _intervening = false;
+        return requestedThrottle;
+    }
+
+    // 1. Fiziksel sinir ve patinaj/spin tavanini belirle
+    int8_t cap = computeThrottleCap(requestedThrottle, steeringDeg, imu, imuValid);
+    int8_t target = (requestedThrottle > cap) ? cap : requestedThrottle;
+
+    // 2. Gaz kesmede gecikme yok, gaz artirmada yumusak rampa (Launch Control)
+    int8_t nextThrottle = target;
+    if (target > _currentThrottle + MAX_THROTTLE_STEP_UP) {
+        nextThrottle = _currentThrottle + MAX_THROTTLE_STEP_UP;
+    }
+
+    _currentThrottle = nextThrottle;
+    _intervening = (nextThrottle < requestedThrottle);
+    return nextThrottle;
+}

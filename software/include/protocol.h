@@ -16,10 +16,11 @@ constexpr float   PROTOCOL_STEERING_MAX =  29.0f; // Tam sag aci (derece)
 constexpr uint32_t PROTOCOL_HEARTBEAT_TIMEOUT_MS = 500; // milisaniye
 
 // --- Surus Komut Paketi (DriveCommand) ---
-// WebSocket veya klavyeden gelen komutlar bu kutu icinde FreeRTOS kuyruguna aktarilir.
+// WebSocket'ten gelen komutlar bu kutu icinde FreeRTOS kuyruguna aktarilir.
 struct DriveCommand {
-    int8_t throttle;  // Gaz yuzdesi (-100 ile +100)
-    float  steering;  // Direksiyon acisi (-29.0 ile +29.0)
+    int8_t throttle;    // Gaz yuzdesi (-100 ile +100)
+    float  steering;    // Direksiyon acisi (-29.0 ile +29.0)
+    bool   tcsEnabled;  // Traction Control (TCS) aktif mi?
 
     // Gelen degerlerin fiziksel sinirlar icinde oldugunu garanti eder (Clamping)
     void validate() {
@@ -28,4 +29,12 @@ struct DriveCommand {
         if (steering < PROTOCOL_STEERING_MIN) steering = PROTOCOL_STEERING_MIN;
         if (steering > PROTOCOL_STEERING_MAX) steering = PROTOCOL_STEERING_MAX;
     }
+};
+
+// --- Traction Control Durum Paketi (Hafta 5) ---
+// vehicleTask tarafindan uretilir, WifiService telefona telemetri olarak gonderir.
+struct TcsStatus {
+    int8_t appliedThrottle;  // TCS sonrasi motorlara gercekten giden gaz (%)
+    bool   enabled;          // TCS acik mi?
+    bool   intervening;      // TCS su an patinaj/spin algilayip gaz kisiyor mu?
 };
