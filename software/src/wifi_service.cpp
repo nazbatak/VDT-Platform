@@ -1,19 +1,15 @@
 #include "../include/wifi_service.h"
 
-// ==============================================================================
-// VDT Platform - Wi-Fi AP & WebSocket Gerceklesimi (Hafta 3)
-// ==============================================================================
-
 WifiService* WifiService::_instance = nullptr;
 
-// --- Dahili Mobil Dokunmatik Web Dashboard (HTML5 + CSS + JS) ---
+// Embedded touch cockpit HTML/CSS/JS stored in flash (PROGMEM) to preserve RAM
 static const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>VDT Platform — Mobil Kokpit</title>
+  <title>RC-Car-ESP32-IMU — Mobile Cockpit</title>
   <style>
     :root {
       --bg: #0f1117;
@@ -233,62 +229,62 @@ static const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
 </head>
 <body>
   <header>
-    <h1>🚗 VDT Platform</h1>
-    <div id="statusBadge" class="badge">KOPTU</div>
+    <h1>🚗 RC-Car Cockpit</h1>
+    <div id="statusBadge" class="badge">DISCONNECTED</div>
   </header>
 
   <div class="metrics">
     <div class="metric-card">
-      <div class="metric-title">Gaz (Throttle)</div>
+      <div class="metric-title">Throttle</div>
       <div id="throttleDisplay" class="metric-val">0%</div>
     </div>
     <div class="metric-card">
-      <div class="metric-title">Direksiyon (Steering)</div>
+      <div class="metric-title">Steering</div>
       <div id="steeringDisplay" class="metric-val">0°</div>
     </div>
   </div>
 
   <div class="imu-bar">
     <div class="imu-item">
-      <div class="imu-lbl">İleri (ax)</div>
+      <div class="imu-lbl">Accel X</div>
       <div id="imuAx" class="imu-val">0.00g</div>
     </div>
     <div class="imu-item">
-      <div class="imu-lbl">Yanal (ay)</div>
+      <div class="imu-lbl">Lateral Y</div>
       <div id="imuAy" class="imu-val">0.00g</div>
     </div>
     <div class="imu-item">
-      <div class="imu-lbl">Dönüş (gz)</div>
+      <div class="imu-lbl">Yaw (gz)</div>
       <div id="imuGz" class="imu-val">0.0°/s</div>
     </div>
     <div class="imu-item">
-      <div class="imu-lbl">Sıcaklık</div>
+      <div class="imu-lbl">Temp</div>
       <div id="imuTemp" class="imu-val">--°C</div>
     </div>
   </div>
 
   <div class="controls">
-    <!-- Sol: Gaz (Dikey Joystick) -->
+    <!-- Left: Vertical throttle joystick -->
     <div id="throttleZone" class="stick-zone">
-      <div class="stick-label">İleri / Geri</div>
+      <div class="stick-label">Drive / Reverse</div>
       <div id="throttlePuck" class="puck"></div>
-      <div class="stick-sub">İleri (+100) / Geri (-100)</div>
+      <div class="stick-sub">Forward (+100) / Reverse (-100)</div>
     </div>
 
-    <!-- Sag: Direksiyon (Yatay Joystick) -->
+    <!-- Right: Horizontal steering joystick -->
     <div id="steeringZone" class="stick-zone">
-      <div class="stick-label">Direksiyon</div>
+      <div class="stick-label">Steering</div>
       <div id="steeringPuck" class="puck"></div>
-      <div class="stick-sub">Sol (-29°) / Sağ (+29°)</div>
+      <div class="stick-sub">Left (-29°) / Right (+29°)</div>
     </div>
   </div>
 
   <div class="tcs-row">
-    <button id="btnTcs" class="btn-tcs">TCS: AÇIK</button>
-    <div id="tcsLamp" class="tcs-lamp">TCS BEKLEMEDE</div>
+    <button id="btnTcs" class="btn-tcs">TCS: ON</button>
+    <div id="tcsLamp" class="tcs-lamp">TCS STANDBY</div>
   </div>
 
-  <button id="btnEmergency" class="btn-emergency">🚨 ACİL DURDURMA</button>
+  <button id="btnEmergency" class="btn-emergency">🚨 EMERGENCY STOP</button>
 
   <script>
     let ws = null;
@@ -310,12 +306,12 @@ static const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
-        badge.textContent = 'BAĞLI';
+        badge.textContent = 'CONNECTED';
         badge.className = 'badge connected';
       };
 
       ws.onclose = () => {
-        badge.textContent = 'KOPTU';
+        badge.textContent = 'DISCONNECTED';
         badge.className = 'badge';
         setTimeout(connectWS, 1000);
       };
@@ -333,10 +329,10 @@ static const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
             document.getElementById('imuGz').textContent = (data.gz >= 0 ? '+' : '') + data.gz.toFixed(1) + '°/s';
             document.getElementById('imuTemp').textContent = data.temp.toFixed(1) + '°C';
             if (data.act) {
-              tcsLamp.textContent = '⚡ TCS MÜDAHALE (' + data.thr + '%)';
+              tcsLamp.textContent = '⚡ TCS ACTIVE (' + data.thr + '%)';
               tcsLamp.className = 'tcs-lamp active';
             } else {
-              tcsLamp.textContent = data.tcs ? 'TCS HAZIR' : 'TCS KAPALI';
+              tcsLamp.textContent = data.tcs ? 'TCS READY' : 'TCS OFF';
               tcsLamp.className = 'tcs-lamp';
             }
           }
@@ -355,10 +351,10 @@ static const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
       }
     }
 
-    // Periyodik Heartbeat & Komut gonderimi (25 Hz - her 40ms)
+    // Periodic heartbeat & command stream (25 Hz / 40 ms)
     setInterval(sendCommand, 40);
 
-    // --- Sol Joystick: Gaz Mantigi (Dikey) ---
+    // Throttle joystick (vertical)
     let throttleActive = false;
     let throttleTouchId = null;
 
@@ -372,7 +368,7 @@ static const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
       const maxDy = rect.height / 2 - 40;
       const clampedDy = Math.max(-maxDy, Math.min(maxDy, dy));
 
-      // Ekran koordinatinda yukari negatif oldugu icin ters ceviriyoruz
+      // Invert Y-axis because screen coordinates grow downward
       throttleVal = -Math.round((clampedDy / maxDy) * 100);
       throttlePuck.style.transform = `translateY(${clampedDy}px)`;
       throttleDisp.textContent = (throttleVal > 0 ? '+' : '') + throttleVal + '%';
@@ -399,7 +395,7 @@ static const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
     throttleZone.addEventListener('touchend', resetThrottle);
     throttleZone.addEventListener('touchcancel', resetThrottle);
 
-    // --- Sag Joystick: Direksiyon Mantigi (Yatay) ---
+    // Steering joystick (horizontal)
     let steeringActive = false;
     let steeringTouchId = null;
 
@@ -439,15 +435,15 @@ static const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
     steeringZone.addEventListener('touchend', resetSteering);
     steeringZone.addEventListener('touchcancel', resetSteering);
 
-    // --- TCS Ac / Kapat Butonu ---
+    // TCS toggle
     btnTcs.addEventListener('click', () => {
       tcsEnabled = !tcsEnabled;
-      btnTcs.textContent = tcsEnabled ? 'TCS: AÇIK' : 'TCS: KAPALI';
+      btnTcs.textContent = tcsEnabled ? 'TCS: ON' : 'TCS: OFF';
       btnTcs.className = tcsEnabled ? 'btn-tcs' : 'btn-tcs off';
       sendCommand();
     });
 
-    // --- Acil Durdurma Butonu ---
+    // Emergency stop
     document.getElementById('btnEmergency').addEventListener('click', () => {
       resetThrottle();
       resetSteering();
@@ -461,8 +457,6 @@ static const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
 </body>
 </html>
 )rawliteral";
-
-// --- WifiService Metodlari ---
 
 WifiService::WifiService()
     : _commandQueue(nullptr),
@@ -490,28 +484,26 @@ void WifiService::begin(QueueHandle_t commandQueue, QueueHandle_t imuQueue,
     _tcsStatusQueue = tcsStatusQueue;
     Serial.printf("\n[Wi-Fi] Access Point olusturuluyor: '%s'...\n", ssid);
 
-    // 1. Wi-Fi Erisim Noktasini (AP) baslat
+    // 1. Start Wi-Fi SoftAP
     WiFi.mode(WIFI_AP);
     if (password && strlen(password) >= 8) {
         WiFi.softAP(ssid, password);
     } else {
-        WiFi.softAP(ssid); // Parolasiz acik ag (hizli baglanti)
+        WiFi.softAP(ssid);
     }
 
     IPAddress IP = WiFi.softAPIP();
-    Serial.printf("[Wi-Fi] AP Hazir! IP Adresi: %s\n", IP.toString().c_str());
+    Serial.printf("[Wi-Fi] AP Ready! IP: %s\n", IP.toString().c_str());
 
-    // 2. HTTP Web Sunucu Yonlendirmeleri
+    // 2. Start HTTP web server (:80)
     _server.on("/", HTTP_GET, [this]() { handleRoot(); });
     _server.onNotFound([this]() { handleNotFound(); });
     _server.begin();
-    Serial.println("[HTTP] Port 80 Web Sunucusu baslatildi.");
 
-    // 3. WebSocket Sunucusunu baslat
+    // 3. Start WebSocket server (:81)
     _webSocket.begin();
     _webSocket.onEvent(webSocketEventWrapper);
-    Serial.println("[WebSocket] Port 81 WebSocket Sunucusu baslatildi.");
-    Serial.println("[Wi-Fi] Telefonunuzla 'VDT-Car' agina baglanip Safari'den '192.168.4.1' adresini acin!\n");
+    Serial.println("[WebSocket] Server started on port 81.");
 }
 
 void WifiService::loop() {
@@ -524,7 +516,7 @@ void WifiService::publishTelemetry() {
     if (!_connected || _imuQueue == nullptr) return;
 
     uint32_t now = millis();
-    if ((now - _lastTelemetryMs) < 50) return; // 20 Hz (50 ms) yayin siniri
+    if ((now - _lastTelemetryMs) < 50) return; // 20 Hz broadcast limit
     _lastTelemetryMs = now;
 
     ImuData data;
@@ -535,7 +527,6 @@ void WifiService::publishTelemetry() {
         xQueuePeek(_tcsStatusQueue, &tcs, 0);
     }
 
-    // 2 ondalik yuvarlama ile hafif JSON paketi olustur
     char jsonBuf[160];
     snprintf(jsonBuf, sizeof(jsonBuf),
              "{\"type\":\"telemetry\",\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,\"gz\":%.1f,\"temp\":%.1f,\"thr\":%d,\"tcs\":%s,\"act\":%s}",
@@ -580,9 +571,8 @@ void WifiService::handleWebSocketEvent(uint8_t num, WStype_t type, uint8_t* payl
 
         case WStype_DISCONNECTED: {
             _connected = false;
-            Serial.printf("[WebSocket] [#%u] Istemci ayrildi! Acil durdurma tetikleniyor.\n", num);
+            Serial.printf("[WebSocket] [#%u] Client disconnected. Stopping motors.\n", num);
 
-            // Guvenlik durdurmasi
             _activeCommand.throttle = 0;
             _activeCommand.steering = 0.0f;
             if (_commandQueue != nullptr) {
@@ -594,25 +584,22 @@ void WifiService::handleWebSocketEvent(uint8_t num, WStype_t type, uint8_t* payl
         case WStype_TEXT: {
             refreshHeartbeat();
 
-            // Gelen JSON paketini ayristir
             StaticJsonDocument<128> doc;
             DeserializationError error = deserializeJson(doc, payload, length);
             if (error) {
                 return;
             }
 
-            // Acil Durdurma kontrolu
             if (doc["emergency"] == true) {
                 _activeCommand.throttle = 0;
                 _activeCommand.steering = 0.0f;
                 if (_commandQueue != nullptr) {
                     xQueueOverwrite(_commandQueue, &_activeCommand);
                 }
-                Serial.println("[WebSocket] Acil Durdurma tetiklendi!");
+                Serial.println("[WebSocket] Emergency stop triggered.");
                 return;
             }
 
-            // Gaz, direksiyon ve TCS durumunu oku
             if (doc.containsKey("throttle")) {
                 _activeCommand.throttle = doc["throttle"].as<int8_t>();
             }
@@ -625,7 +612,6 @@ void WifiService::handleWebSocketEvent(uint8_t num, WStype_t type, uint8_t* payl
 
             _activeCommand.validate();
 
-            // Kargo bandina (Queue) en yeni komutu birak
             if (_commandQueue != nullptr) {
                 xQueueOverwrite(_commandQueue, &_activeCommand);
             }

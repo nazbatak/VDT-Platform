@@ -1,25 +1,23 @@
 #pragma once
 #include <Arduino.h>
 
-// MG995 ve standart RC servolar icin surucu sinifi (SRP: Yalnizca aci -> PWM donusumu)
+// MG995 RC servo driver (angle to 50 Hz PWM conversion)
 class ServoDriver {
 public:
-    // Kurucu fonksiyon: yalnizca sinyal pinini alir (Diger sabitler cpp dosyasindadir)
     explicit ServoDriver(uint8_t pin);
 
-    // Donanim PWM kanalini (50 Hz, 16-bit) baslatir ve servoyu merkeze alir
+    // Attach 50 Hz 16-bit PWM channel and move servo to center
     void begin();
 
-    // Servoyu belirli bir aciya konumlandirir (0.0 ile 180.0 derece arasi)
+    // Move servo within software safety bounds (0.0 to 180.0 deg)
     void setAngle(float angleDeg);
 
-    // Servoyu guvenli merkez konumuna (90 derece) getirir
+    // Move servo to neutral 90 deg position
     void center();
 
-    // Mekanik sikismalari onlemek icin yazilimsal guvenlik sinirlari koyar
+    // Set software min/max angle limits to prevent mechanical binding
     void setLimits(float minDeg, float maxDeg);
 
-    // Mevcut aci degerini dondurur
     float getAngle() const;
 
 private:
@@ -28,6 +26,5 @@ private:
     float   _maxDeg;
     float   _currentAngle;
 
-    // Aci degerini (derece) LEDC 16-bit duty degerine donusturur
     uint32_t angleToDuty(float angleDeg) const;
 };

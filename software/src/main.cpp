@@ -9,7 +9,7 @@
 #include "imu_driver.h"
 #include "traction_control.h"
 
-// Donanim nesneleri
+// Hardware abstraction instances
 MotorPins leftPins = {
     .pwm = PIN_MOTOR_LEFT_PWM,
     .in1 = PIN_MOTOR_LEFT_IN1,
@@ -22,42 +22,34 @@ MotorPins rightPins = {
 };
 MotorDriver motors(leftPins, rightPins, PIN_MOTOR_STBY);
 
-// Direksiyon servosu ve katmani
-ServoDriver servo(PIN_SERVO_STEERING);
-Steering steering(servo);
-
-// Arac Kontrol Unitesi (VCU)
+ServoDriver       servo(PIN_SERVO_STEERING);
+Steering          steering(servo);
 VehicleController vehicle(motors, steering);
-
-// MPU6050 IMU Sensöru (Hafta 4) & Traction Control (Hafta 5)
-ImuDriver          imu(PIN_IMU_SDA, PIN_IMU_SCL);
+ImuDriver         imu(PIN_IMU_SDA, PIN_IMU_SCL);
 TractionController tcs;
 
-// --- FreeRTOS ve Wi-Fi Katmani (Hafta 3 & 5) ---
+// FreeRTOS inter-core queues & Wi-Fi service
 QueueHandle_t commandQueue   = nullptr;
 QueueHandle_t imuQueue       = nullptr;
 QueueHandle_t tcsStatusQueue = nullptr;
 WifiService   wifiService;
 
-// Bagimsiz IMU gorevi (Core 1, Oncelik 1 - Motor gorevinden daha dusuk oncelik)
-// 100 Hz (10 ms) ile sensoru okur; her 100 ms'de bir Serial Monitor'e telemetri basar
+// Core 1 IMU task (Priority 1): samples MPU6050 at 100 Hz without blocking vehicleTask
 void imuTask(void* pvParameters) {
     TickType_t lastWakeTime = xTaskGetTickCount();
-    const TickType_t period = pdMS_TO_TICKS(10); // 100 Hz (10 ms)
+    const TickType_t period = pdMS_TO_TICKS(10);
     uint32_t lastPrintMs = 0;
 
     while (true) {
         if (imu.isConnected()) {
             if (imu.read() && imuQueue != nullptr) {
-                // En guncel IMU verisini kargo bandina birak (Core 0 ve vehicleTask buradan okur)
                 xQueueOverwrite(imuQueue, &imu.getData());
             }
 
-            // Serial Monitor'e 10 Hz (100 ms) periyotla telemetri yazdir
             if (millis() - lastPrintMs >= 100) {
                 lastPrintMs = millis();
                 const ImuData& d = imu.getData();
-                Serial.printf("📊 [IMU] Acc(g): [%+0.2f, %+0.2f, %+0.2f] | Gyro(°/s): [%+05.1f, %+05.1f, %+05.1f] | Temp: %.1f°C\n",
+                Serial.printf("[IMU] Acc(g): [%+0.2f, %+0.2f, %+0.2f] | Gyro(deg/s): [%+05.1f, %+05.1f, %+05.1f] | Temp: %.1fC\n",
                               d.ax, d.ay, d.az, d.gx, d.gy, d.gz, d.temp);
             }
         }
@@ -66,8 +58,7 @@ void imuTask(void* pvParameters) {
     }
 }
 
-
-// Tek motor gorevi: Motor ve direksiyon donanimini yalnizca bu gorev surer (SOLID & Eszamanlilik Guvenligi)
+// Core 1 vehicle control task (Priority 2): single owner of motor/servo hardware and fail-safe watchdog
 void vehicleTask(void* pvParameters) {
     DriveCommand activeCmd = {0, 0.0f, true};
     DriveCommand incomingCmd = {0, 0.0f, true};
@@ -75,8 +66,6 @@ void vehicleTask(void* pvParameters) {
     bool wasTimedOut = false;
 
     while (true) {
-        // 1. Fail-Safe / Watchdog Kontrolu
-        // Eger istemci bagliysa ve 500ms boyunca heartbeat gelmediyse acil durdur
         if (wifiService.isHeartbeatTimedOut()) {
             if (!wasTimedOut) {
                 vehicle.emergencyStop();
@@ -84,18 +73,16 @@ void vehicleTask(void* pvParameters) {
                 activeCmd.throttle = 0;
                 activeCmd.steering = 0.0f;
                 wasTimedOut = true;
-                Serial.println("\n🚨 [WATCHDOG / FAIL-SAFE] Baglanti zaman asimi! Motorlar durduruldu.");
+                Serial.println("\n[WATCHDOG] Heartbeat timeout! Motors stopped.");
             }
         } else {
             wasTimedOut = false;
         }
 
-        // 2. Kuyruktan yeni surus komutu geldiyse guncelle (en fazla 20ms bekle)
         if (xQueueReceive(commandQueue, &incomingCmd, pdMS_TO_TICKS(20)) == pdPASS) {
             activeCmd = incomingCmd;
         }
 
-        // 3. Zaman asimi yoksa TCS suzgecinden gecirip motorlari sur
         if (!wasTimedOut) {
             tcs.setEnabled(activeCmd.tcsEnabled);
 
@@ -104,7 +91,6 @@ void vehicleTask(void* pvParameters) {
 
             vehicle.drive(safeThrottle, activeCmd.steering);
 
-            // TCS durumunu Core 0'daki telemetri yayinina bildir
             if (tcsStatusQueue != nullptr) {
                 TcsStatus status = { safeThrottle, tcs.isEnabled(), tcs.isIntervening() };
                 xQueueOverwrite(tcsStatusQueue, &status);
@@ -115,14 +101,11 @@ void vehicleTask(void* pvParameters) {
     }
 }
 
-// Baslatma bilgilerini yazdir
 void printStartupBanner() {
     Serial.println("\n==================================================");
-    Serial.println("🚗 VDT-Platform: Wi-Fi Mobil Kokpit Yayinda");
-    Serial.println("==================================================");
-    Serial.println("📶 Wi-Fi Erisim Noktasi: 'VDT-Car' (Sifresiz)");
-    Serial.println("🌐 Tarayici Adresi    : http://192.168.4.1");
-    Serial.println("📱 Telefonunuzdan baglanip surus yapabilirsiniz.");
+    Serial.println("RC-Car-ESP32-IMU: Wi-Fi Mobile Cockpit Ready");
+    Serial.println("Wi-Fi SSID : 'VDT-Car' (Open)");
+    Serial.println("Dashboard  : http://192.168.4.1");
     Serial.println("==================================================\n");
 }
 
@@ -130,49 +113,23 @@ void setup() {
     Serial.begin(115200);
     delay(1500);
 
-    // B kanalina bagli sol motor mekanik yerlesimden dolayi ters dondugu icin duzeltildi
+    // Left motor is mechanically mirrored on the chassis
     motors.invertMotor(MOTOR_LEFT, true);
-
-    // Araci baslat (motorlari kurar, servoyu baslatir ve guvenli durusa alir)
     vehicle.begin();
 
-    // 1 elemanlik komut ve telemetri kuyruklari olustur (En yeni veri her zaman eskini ezer)
     commandQueue   = xQueueCreate(1, sizeof(DriveCommand));
     imuQueue       = xQueueCreate(1, sizeof(ImuData));
     tcsStatusQueue = xQueueCreate(1, sizeof(TcsStatus));
 
-    // Wi-Fi Access Point ve Web/WebSocket sunucusunu baslat
     wifiService.begin(commandQueue, imuQueue, tcsStatusQueue, "VDT-Car");
-
-    // MPU6050 IMU sensorunu baslat (I2C 400 kHz)
     imu.begin();
 
-    // Motor gorevini Core 1 uzerinde calistir (Katı zamanlama ve guvenlik, Oncelik 2)
-    xTaskCreatePinnedToCore(
-        vehicleTask,
-        "VehicleTask",
-        4096,
-        nullptr,
-        2,              // Yuksek oncelik
-        nullptr,
-        1               // Core 1
-    );
-
-    // IMU okuma gorevini Core 1 uzerinde calistir (Oncelik 1 - Motor gorevinden bagimsiz)
-    xTaskCreatePinnedToCore(
-        imuTask,
-        "ImuTask",
-        4096,
-        nullptr,
-        1,              // Dusuk oncelik
-        nullptr,
-        1               // Core 1
-    );
+    xTaskCreatePinnedToCore(vehicleTask, "VehicleTask", 4096, nullptr, 2, nullptr, 1);
+    xTaskCreatePinnedToCore(imuTask, "ImuTask", 4096, nullptr, 1, nullptr, 1);
 
     printStartupBanner();
 }
 
 void loop() {
-    // Wi-Fi ve WebSocket ag olaylarini isle (Core 0 / Standart Dongu)
     wifiService.loop();
 }

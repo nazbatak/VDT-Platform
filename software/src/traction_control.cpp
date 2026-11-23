@@ -1,29 +1,22 @@
 #include "traction_control.h"
 #include <math.h>
 
-// ==============================================================================
-// VDT Platform - IMU Tabanli Traction Control Gerceklesimi (Hafta 5)
-// ==============================================================================
-
-// --- Kalibrasyon ve Guvenlik Esikleri (Saha testinde buradan ayarlanir) ---
-// Katman 1: Kalkis yumusatma (her ~25ms dongude en fazla +%2 artis -> 0->100% ~1.25sn)
+// Layer 1: Launch slew-rate limit (+2% per ~25ms tick -> 0 to 100% in ~1.25s)
 static constexpr int8_t  MAX_THROTTLE_STEP_UP   = 2;
 
-// Katman 2: Viraj ici gaz siniri (direksiyon tam kirikken en fazla %50 gaz)
+// Layer 2: Steering-based throttle cap and spin thresholds
 static constexpr float   STEERING_DEADBAND_DEG  = 8.0f;
 static constexpr int8_t  CORNER_MIN_CAP_PCT     = 50;
-
-// Virajda spin / oversteer esikleri (MPU6050 olcumleri)
-static constexpr float   SPIN_YAW_THRESHOLD_DPS = 100.0f; // °/s
+static constexpr float   SPIN_YAW_THRESHOLD_DPS = 100.0f; // deg/s
 static constexpr float   SPIN_LAT_G_THRESHOLD   = 0.30f;  // g
-static constexpr int8_t  SPIN_THROTTLE_CAP_PCT  = 40;     // Spin aninda gazi %40'a cek
+static constexpr int8_t  SPIN_THROTTLE_CAP_PCT  = 40;
 
-// Katman 3: Duz kalkista yerinde patinaj tespiti ve kademeli toparlanma
-static constexpr int8_t  SLIP_CHECK_MIN_THR     = 55;     // %55 ustu gazda kontrol et
-static constexpr float   MIN_EXPECTED_ACCEL_G   = 0.08f;  // En az bu kadar one ivmelenmeli
-static constexpr uint8_t SLIP_DETECT_TICKS      = 5;      // ~125ms boyunca ivme yoksa patinaj
-static constexpr int8_t  SLIP_THROTTLE_CAP_PCT  = 45;     // Tutunma saglanana kadar %45'e dusur
-static constexpr int8_t  SLIP_RECOVERY_STEP     = 1;      // Tutunma gelince tavani yavasca (+%1) ac
+// Layer 3: Longitudinal wheelspin detection and progressive recovery
+static constexpr int8_t  SLIP_CHECK_MIN_THR     = 55;
+static constexpr float   MIN_EXPECTED_ACCEL_G   = 0.08f;
+static constexpr uint8_t SLIP_DETECT_TICKS      = 5;
+static constexpr int8_t  SLIP_THROTTLE_CAP_PCT  = 45;
+static constexpr int8_t  SLIP_RECOVERY_STEP     = 1;
 
 TractionController::TractionController()
     : _enabled(true),
@@ -60,7 +53,7 @@ void TractionController::reset() {
 int8_t TractionController::computeThrottleCap(int8_t requestedThrottle, float steeringDeg, const ImuData& imu, bool imuValid) {
     int8_t cap = 100;
 
-    // 1. Direksiyon acisina gore viraj tavanini hesapla (0° -> %100, 29° -> %65)
+    // Scale down max throttle as steering angle increases
     float absSteer = fabsf(steeringDeg);
     if (absSteer > STEERING_DEADBAND_DEG) {
         float ratio = (absSteer - STEERING_DEADBAND_DEG) / (PROTOCOL_STEERING_MAX - STEERING_DEADBAND_DEG);
@@ -72,7 +65,7 @@ int8_t TractionController::computeThrottleCap(int8_t requestedThrottle, float st
         return cap;
     }
 
-    // 2. Virajda asiri savrulma (Yaw Rate veya Yanal G) varsa gazi sertce sinirla
+    // Cut throttle on cornering oversteer / excessive lateral G
     if (absSteer > STEERING_DEADBAND_DEG &&
         (fabsf(imu.gz) > SPIN_YAW_THRESHOLD_DPS || fabsf(imu.ay) > SPIN_LAT_G_THRESHOLD)) {
         if (cap > SPIN_THROTTLE_CAP_PCT) {
@@ -80,8 +73,7 @@ int8_t TractionController::computeThrottleCap(int8_t requestedThrottle, float st
         }
     }
 
-    // 3. Duz kalkista yuksek gaza ragmen arac one atilamiyorsa (yerinde patinaj) tavani dusur,
-    // tutunma geldiginde ise tavani yavas yavas (+%1) yukari ac
+    // Detect straight-line wheelspin (high throttle without forward acceleration) and recover gradually
     if (absSteer <= STEERING_DEADBAND_DEG && requestedThrottle >= SLIP_CHECK_MIN_THR) {
         if (imu.ax < MIN_EXPECTED_ACCEL_G) {
             if (_highThrottleTicks < 255) _highThrottleTicks++;
@@ -110,7 +102,7 @@ int8_t TractionController::computeThrottleCap(int8_t requestedThrottle, float st
 }
 
 int8_t TractionController::process(int8_t requestedThrottle, float steeringDeg, const ImuData& imu, bool imuValid) {
-    // Guvenlik Kurali: TCS kapaliysa, gaz sifirsa veya geri vites/frense hic beklemeden gecir
+    // Safety rule: never delay braking, coasting, or reverse
     if (!_enabled || requestedThrottle <= 0) {
         _currentThrottle = requestedThrottle;
         _slipCap = 100;
@@ -119,11 +111,10 @@ int8_t TractionController::process(int8_t requestedThrottle, float steeringDeg, 
         return requestedThrottle;
     }
 
-    // 1. Fiziksel sinir ve patinaj/spin tavanini belirle
     int8_t cap = computeThrottleCap(requestedThrottle, steeringDeg, imu, imuValid);
     int8_t target = (requestedThrottle > cap) ? cap : requestedThrottle;
 
-    // 2. Gaz kesmede gecikme yok, gaz artirmada yumusak rampa (Launch Control)
+    // Limit only upward throttle steps; allow instant throttle reduction
     int8_t nextThrottle = target;
     if (target > _currentThrottle + MAX_THROTTLE_STEP_UP) {
         nextThrottle = _currentThrottle + MAX_THROTTLE_STEP_UP;

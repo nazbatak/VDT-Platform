@@ -1,77 +1,80 @@
-# 📡 VDT Platform — Wi-Fi WebSocket İletişim Protokolü
+# 📡 RC-Car-ESP32-IMU — Wi-Fi WebSocket Communication Protocol
 
-## 1. Genel Bakış
-VDT Platform, araç kontrolü ve telemetri aktarımı için **bağımsız Wi-Fi Access Point (AP)** ve **tam çift yönlü (full-duplex) WebSocket** mimarisini kullanır.
+## 1. Overview
+The vehicle uses an **independent ESP32 Wi-Fi Access Point (SoftAP)** paired with an embedded HTTP server and a **full-duplex WebSocket** channel for low-latency Drive-by-Wire control and live IMU telemetry.
 
-* **Wi-Fi SSID:** `VDT-Car` (Açık / Parolasız)
-* **ESP32 IP Adresi:** `192.168.4.1`
-* **HTTP Web Sunucu Portu:** `80` (`http://192.168.4.1`)
-* **WebSocket Portu:** `81` (`ws://192.168.4.1:81/`)
-
----
-
-## 2. Ağ ve Servis Mimarisi
-
-```
-[ Telefon / Tarayıcı (Safari/Chrome) ]
-   │
-   ├─► HTTP GET http://192.168.4.1:80  ──► Mobil Dashboard (HTML5/CSS3/JS)
-   │
-   └─► WS CONNECT ws://192.168.4.1:81  ──► Canlı Çift Yönlü İletişim (25 Hz)
-```
-
-1. **HTTP Port 80:** ESP32'nin flash belleğinde gömülü bulunan (`PROGMEM`) dokunmatik sanal joystick sayfasını istemciye sunar. Sıfır harici internet ve sıfır CDN bağımlılığı vardır.
-2. **WebSocket Port 81:** Düşük gecikmeli (< 20 ms), canlı komut akışı ve telemetri kanalıdır.
+* **Wi-Fi SSID:** `VDT-Car` (Open / No password)
+* **ESP32 Gateway IP:** `192.168.4.1`
+* **HTTP Web Server Port:** `80` (`http://192.168.4.1`)
+* **WebSocket Port:** `81` (`ws://192.168.4.1:81/`)
 
 ---
 
-## 3. Komut Mesaj Formatı (İstemci ➔ ESP32)
+## 2. Network Architecture
 
-İstemci (mobil web sayfası), WebSocket üzerinden JSON formatında mesajlar gönderir:
+```
+[ Phone / Browser (Safari / Chrome) ]
+   │
+   ├─► HTTP GET http://192.168.4.1:80  ──► Mobile Touch Cockpit (HTML5/CSS3/JS in PROGMEM)
+   │
+   └─► WS ws://192.168.4.1:81          ──► Full-Duplex Commands (25 Hz) & Telemetry (20 Hz)
+```
 
-### 3.1 Normal Sürüş Komutu (Drive)
-Saniyede 25 kez (her 40 ms'de bir) periyodik olarak veya joystick hareket ettikçe gönderilir:
+---
+
+## 3. Inbound Commands (Client ➔ ESP32)
+
+The web dashboard streams JSON control packets at 25 Hz (every 40 ms) and immediately upon touch-end or button press:
+
+### 3.1 Drive & TCS Control
 ```json
 {
   "throttle": 45,
-  "steering": 12.5
+  "steering": 12.5,
+  "tcs": true
 }
 ```
-* `throttle`: Tamsayı (`int8_t`), `-100` (tam geri) ile `+100` (tam ileri) arası.
-* `steering`: Kayan noktalı sayı (`float`), `-29.0` (tam sol) ile `+29.0` (tam sağ) derece arası.
+* `throttle`: `int8_t` (`-100` full reverse to `+100` full forward).
+* `steering`: `float` (`-29.0` full left to `+29.0` full right degrees).
+* `tcs`: `bool` (enables/disables IMU-based Traction Control).
 
-### 3.2 Acil Durdurma Komutu (Emergency Stop)
-Kırmızı acil durdurma butonuna basıldığında gönderilir:
+### 3.2 Emergency Stop
 ```json
 {
   "emergency": true
 }
 ```
-* ESP32 motorları anında keser (`PWM 0`) ve direksiyon servosu merkeze (`0°`) döner.
+* Immediately stops both motors (`PWM 0`), centers steering (`0°`), and resets the TCS ramp.
 
 ---
 
-## 4. Güvenlik ve Emniyet Kilidi (Fail-Safe / Watchdog)
+## 4. Outbound Telemetry (ESP32 ➔ Client)
 
-Sistem 3 kademeli donanımsal ve yazılımsal güvenlik mekanizması içerir:
-
-1. **WebSocket Kopma Olayı (`WStype_DISCONNECTED`):**
-   * Telefonun Wi-Fi bağlantısı koptuğunda veya Safari sekmesi kapatıldığında ESP32 anında durur.
-2. **Heartbeat Zaman Aşımı (`PROTOCOL_HEARTBEAT_TIMEOUT_MS = 500 ms`):**
-   * Bağlantı açık görünse dahi, telefon 500 ms boyunca yeni paket iletmezse araç otomatik olarak motorları keser.
-3. **Fiziksel Değer Sınırlaması (Clamping):**
-   * Hatalı veya sınır dışı bir veri gelse bile `DriveCommand::validate()` fonksiyonu değerleri güvenli aralığa (`[-100, 100]`, `[-29, 29]`) kırpar.
-
----
-
-## 5. Telemetri Yayını (ESP32 ➔ İstemci — Hafta 4 Altyapısı)
-
-WebSocket kanalı çift yönlü olduğu için, Hafta 4'te MPU6050 sensöründen okunacak veriler aynı kanal üzerinden telefon ekranına geri gönderilecektir:
+Core 0 peeks `imuQueue` and `tcsStatusQueue` every 50 ms (**20 Hz**) and broadcasts:
 ```json
 {
-  "accel_x": 0.12,
-  "accel_y": -0.05,
-  "gyro_z": 14.2,
-  "battery_v": 7.8
+  "type": "telemetry",
+  "ax": 0.12,
+  "ay": -0.34,
+  "az": 0.98,
+  "gz": 45.2,
+  "temp": 26.8,
+  "thr": 50,
+  "tcs": true,
+  "act": true
 }
 ```
+* `ax`, `ay`, `az`: Calibrated acceleration in `g` (`+ax` forward, `+ay` left, `+az` up).
+* `gz`: Yaw angular velocity in `deg/s` (`+` left turn, `-` right turn).
+* `temp`: MPU6050 die temperature in `°C`.
+* `thr`: Actual post-TCS throttle sent to motor driver (`%`).
+* `tcs`: Current TCS enabled state.
+* `act`: `true` when TCS is actively limiting throttle to prevent wheelspin or oversteer.
+
+---
+
+## 5. Safety & Fail-Safe Mechanisms
+
+1. **WebSocket Disconnect (`WStype_DISCONNECTED`):** Motors stop immediately if the browser closes or drops off Wi-Fi.
+2. **Heartbeat Watchdog (`PROTOCOL_HEARTBEAT_TIMEOUT_MS = 500 ms`):** Core 1's `vehicleTask` monitors packet freshness and triggers `emergencyStop()` if no message arrives for 500 ms.
+3. **Input Clamping (`DriveCommand::validate()`):** Enforces physical bounds (`[-100, 100]` throttle, `[-29, 29]` steering) regardless of payload content.

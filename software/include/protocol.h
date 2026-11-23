@@ -1,28 +1,21 @@
 #pragma once
 #include <Arduino.h>
 
-// ==============================================================================
-// VDT Platform - Iletisim Protokolu ve Surus Tanimlamalari (Hafta 3)
-// Bu dosya telefon/web ve ESP32 arasindaki komut yapisini ve sinirlari belirler.
-// ==============================================================================
+// Drive-by-Wire communication protocol limits and FreeRTOS queue payloads.
 
-// --- Fiziksel Guvenlik Sinirlari ---
-constexpr int8_t  PROTOCOL_THROTTLE_MIN = -100;   // Maksimum geri gaz (%)
-constexpr int8_t  PROTOCOL_THROTTLE_MAX =  100;   // Maksimum ileri gaz (%)
-constexpr float   PROTOCOL_STEERING_MIN = -29.0f; // Tam sol aci (derece)
-constexpr float   PROTOCOL_STEERING_MAX =  29.0f; // Tam sag aci (derece)
+constexpr int8_t   PROTOCOL_THROTTLE_MIN = -100;   // Max reverse (%)
+constexpr int8_t   PROTOCOL_THROTTLE_MAX =  100;   // Max forward (%)
+constexpr float    PROTOCOL_STEERING_MIN = -29.0f; // Full left (deg)
+constexpr float    PROTOCOL_STEERING_MAX =  29.0f; // Full right (deg)
+constexpr uint32_t PROTOCOL_HEARTBEAT_TIMEOUT_MS = 500;
 
-// Baglanti koptugunda veya veri akisi durdugunda fail-safe devreye girme suresi
-constexpr uint32_t PROTOCOL_HEARTBEAT_TIMEOUT_MS = 500; // milisaniye
-
-// --- Surus Komut Paketi (DriveCommand) ---
-// WebSocket'ten gelen komutlar bu kutu icinde FreeRTOS kuyruguna aktarilir.
+// Incoming drive command from WebSocket client
 struct DriveCommand {
-    int8_t throttle;    // Gaz yuzdesi (-100 ile +100)
-    float  steering;    // Direksiyon acisi (-29.0 ile +29.0)
-    bool   tcsEnabled;  // Traction Control (TCS) aktif mi?
+    int8_t throttle;    // -100 to +100 (%)
+    float  steering;    // -29.0 to +29.0 (deg)
+    bool   tcsEnabled;  // Traction Control enabled flag
 
-    // Gelen degerlerin fiziksel sinirlar icinde oldugunu garanti eder (Clamping)
+    // Clamp values to physical safety limits
     void validate() {
         if (throttle < PROTOCOL_THROTTLE_MIN) throttle = PROTOCOL_THROTTLE_MIN;
         if (throttle > PROTOCOL_THROTTLE_MAX) throttle = PROTOCOL_THROTTLE_MAX;
@@ -31,10 +24,9 @@ struct DriveCommand {
     }
 };
 
-// --- Traction Control Durum Paketi (Hafta 5) ---
-// vehicleTask tarafindan uretilir, WifiService telefona telemetri olarak gonderir.
+// Outbound Traction Control telemetry snapshot
 struct TcsStatus {
-    int8_t appliedThrottle;  // TCS sonrasi motorlara gercekten giden gaz (%)
-    bool   enabled;          // TCS acik mi?
-    bool   intervening;      // TCS su an patinaj/spin algilayip gaz kisiyor mu?
+    int8_t appliedThrottle;  // Final throttle sent to motors (%)
+    bool   enabled;
+    bool   intervening;      // True when TCS actively limits throttle
 };

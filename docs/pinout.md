@@ -1,34 +1,25 @@
 # ESP32 DevKit V1 Pinout
 
-> Kod tarafı: `software/include/pins.h`. Burayı değiştirirsen orayı da değiştir.
-> Son KiCad doğrulaması: _henüz yapılmadı_
+> Firmware definitions: `software/include/pins.h`. Keep both files synchronized.
 
-## Kullanılan pinler
+## Active Pins
 
-| Modül | Sinyal | ESP32 GPIO | Tür | Motor / Fonksiyon | Hafta | Durum |
-|---|---|---|---|---|---|---|
-| TB6612FNG | PWMA | 25 | PWM | Sağ Motor Hız (PWM) | 1 | Kullanımda |
-| TB6612FNG | AIN1 | 26 | GPIO | Sağ Motor Yön 1 | 1 | Kullanımda |
-| TB6612FNG | AIN2 | 27 | GPIO | Sağ Motor Yön 2 | 1 | Kullanımda |
-| TB6612FNG | PWMB | 14 | PWM | Sol Motor Hız (PWM) | 1 | Kullanımda |
-| TB6612FNG | BIN1 | 32 | GPIO | Sol Motor Yön 1 (12 strapping, 16 yok → 32) | 1 | Kullanımda |
-| TB6612FNG | BIN2 | 13 | GPIO | Sol Motor Yön 2 | 1 | Kullanımda |
-| TB6612FNG | STBY | 33 | GPIO | Sürücü Standby/Aktif | 1 | Kullanımda |
-| MG995 servo | Sinyal | 4 | PWM | Direksiyon Açısı (PWM) | 2 | Kullanımda |
-| MPU6050 | SDA | 21 | I2C | I2C Veri Hattı (Serial Data) | 4 | Kullanımda |
-| MPU6050 | SCL | 22 | I2C | I2C Saat Hattı (Serial Clock) | 4 | Kullanımda |
+| Module | Signal | ESP32 GPIO | Type | Function |
+|---|---|---|---|---|
+| TB6612FNG | PWMA | 25 | PWM | Right Motor Speed (PWM) |
+| TB6612FNG | AIN1 | 26 | GPIO | Right Motor Direction 1 |
+| TB6612FNG | AIN2 | 27 | GPIO | Right Motor Direction 2 |
+| TB6612FNG | PWMB | 14 | PWM | Left Motor Speed (PWM) |
+| TB6612FNG | BIN1 | 32 | GPIO | Left Motor Direction 1 (avoids GPIO 12 strapping) |
+| TB6612FNG | BIN2 | 13 | GPIO | Left Motor Direction 2 |
+| TB6612FNG | STBY | 33 | GPIO | Motor Driver Standby / Enable |
+| MG995 Servo | Signal | 4 | PWM | Front Steering Angle (50 Hz PWM) |
+| MPU6050 | SDA | 21 | I2C | I2C Serial Data |
+| MPU6050 | SCL | 22 | I2C | I2C Serial Clock |
 
-## Rezerve pinler (henüz bağlı değil)
+## Pins to Avoid on ESP32
 
-| Modül | Sinyal | ESP32 GPIO | Hafta/Faz |
-|---|---|---|---|
-| Pil ölçümü | ADC | 34 | İsteğe bağlı |
-| Encoder | Sol / Sağ | 35 / 39 | Faz 6 |
-| MCP2515 CAN | SCK / MISO / MOSI / CS / INT | 18 / 19 / 23 / 5 / 17 | Faz 5 |
-
-## Kaçınılacak pinler
-
-- Strapping: 0, 2, 5 (CS hariç), 12, 15
-- Flash: 6-11
-- Sadece giriş: 34, 35, 36, 39
-- USB seri: 1, 3
+- **Strapping pins:** 0, 2, 5, 12, 15
+- **SPI Flash pins:** 6–11
+- **Input-only pins:** 34, 35, 36, 39
+- **USB Serial (UART0):** 1, 3

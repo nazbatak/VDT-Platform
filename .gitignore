@@ -1,7 +1,7 @@
 # macOS
 .DS_Store
 
-# PlatformIO & Derleme Ciktilari
+# PlatformIO & Build Artifacts
 .pio/
 */.pio/
 .cache/
@@ -9,7 +9,7 @@
 compile_commands.json
 */compile_commands.json
 
-# VS Code dahili yapilandirma ve gecici veriler
+# VS Code / IDE Local Files
 .vscode/ipch/
 */.vscode/ipch/
 .vscode/c_cpp_properties.json
@@ -17,26 +17,26 @@ compile_commands.json
 .vscode/launch.json
 */.vscode/launch.json
 
-# Gizli bilgiler (asla repoya girmemeli)
+# Secrets
 .env
 *.env
 secrets.h
 *.pem
 *.key
 
-# Python (3. Hafta telemetri ve backend)
+# Python
 __pycache__/
 *.pyc
 .venv/
 venv/
 
-# KiCad gecici / yedek dosyalari (8. Hafta PCB)
+# KiCad Backups & Cache
 *-backups/
 *.kicad_prl
 fp-info-cache
 _autosave-*
 *.lck
 
-# Telemetri ve log dosyalari
+# Logs
 logs/
 *.log
